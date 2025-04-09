@@ -13,7 +13,7 @@ from dynamic_network_architectures.building_blocks.helper import maybe_convert_s
 from dynamic_network_architectures.building_blocks.residual import BasicBlockD, BottleneckD
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from dynamic_network_architectures.building_blocks.helper import convert_conv_op_to_dim
 from nnunetv2.utilities.plans_handling.plans_handler import ConfigurationManager, PlansManager
 from dynamic_network_architectures.building_blocks.helper import get_matching_instancenorm, convert_dim_to_conv_op
@@ -33,7 +33,7 @@ class MambaLayer(nn.Module):
                 expand=expand,    # Block expansion factor
         )
     
-    @autocast(enabled=False)
+    @autocast(device_type='cuda', enabled=False)
     def forward(self, x):
         if x.dtype == torch.float16:
             x = x.type(torch.float32)
@@ -394,19 +394,24 @@ def get_umamba_enc_from_plans(plans_manager: PlansManager,
         'n_conv_per_stage_decoder': configuration_manager.n_conv_per_stage_decoder
     }
 
-    model = network_class(
-        input_channels=num_input_channels,
-        n_stages=num_stages,
-        features_per_stage=[min(configuration_manager.UNet_base_num_features * 2 ** i,
+    # Define all network_class constructor arguments
+    params = {
+        'input_channels': num_input_channels,
+        'n_stages': num_stages,
+        'features_per_stage': [min(configuration_manager.UNet_base_num_features * 2 ** i,
                                 configuration_manager.unet_max_num_features) for i in range(num_stages)],
-        conv_op=conv_op,
-        kernel_sizes=configuration_manager.conv_kernel_sizes,
-        strides=configuration_manager.pool_op_kernel_sizes,
-        num_classes=label_manager.num_segmentation_heads,
-        deep_supervision=deep_supervision,
+        'conv_op': conv_op,
+        'kernel_sizes': configuration_manager.conv_kernel_sizes,
+        'strides': configuration_manager.pool_op_kernel_sizes,
+        'num_classes': label_manager.num_segmentation_heads,
+        'deep_supervision': deep_supervision,
         **conv_or_blocks_per_stage,
         **kwargs[segmentation_network_class_name]
+    }
+    model = network_class(
+        **params
     )
+    model._constructor_arguments = params
     model.apply(InitWeights_He(1e-2))
     if network_class == UMambaEnc:
         model.apply(init_last_bn_before_add_to_0)

@@ -73,16 +73,18 @@ def maybe_load_checkpoint(nnunet_trainer: nnUNetTrainer, continue_training: bool
         raise RuntimeError('Cannot both continue a training AND load pretrained weights. Pretrained weights can only '
                            'be used at the beginning of the training.')
     if continue_training:
-        expected_checkpoint_file = join(nnunet_trainer.output_folder, 'checkpoint_final.pth')
-        if not isfile(expected_checkpoint_file):
-            expected_checkpoint_file = join(nnunet_trainer.output_folder, 'checkpoint_latest.pth')
-        # special case where --c is used to run a previously aborted validation
-        if not isfile(expected_checkpoint_file):
-            expected_checkpoint_file = join(nnunet_trainer.output_folder, 'checkpoint_best.pth')
-        if not isfile(expected_checkpoint_file):
-            print(f"WARNING: Cannot continue training because there seems to be no checkpoint available to "
-                               f"continue from. Starting a new training...")
+        checkpoint_names = [
+            ('checkpoint_final.pth', join(nnunet_trainer.output_folder, 'checkpoint_final.pth')),
+            ('checkpoint_latest.pth', join(nnunet_trainer.output_folder, 'checkpoint_latest.pth')),
+            ('checkpoint_best.pth', join(nnunet_trainer.output_folder, 'checkpoint_best.pth'))
+        ]
+        valid_checkpoints = [(name, path) for name, path in checkpoint_names if isfile(path)]
+        if not valid_checkpoints:
+            print("WARNING: Cannot continue training because there seems to be no checkpoint available to continue from. Starting a new training...")
             expected_checkpoint_file = None
+        else:
+            found_checkpoint_file, expected_checkpoint_file = max(valid_checkpoints, key=lambda item: os.path.getmtime(item[1]))
+            print(f"Selected checkpoint file '{found_checkpoint_file}' to continue training")
     elif validation_only:
         expected_checkpoint_file = join(nnunet_trainer.output_folder, 'checkpoint_final.pth')
         if not isfile(expected_checkpoint_file):
@@ -200,8 +202,11 @@ def run_training(dataset_name_or_id: Union[str, int],
             cudnn.deterministic = False
             cudnn.benchmark = True
 
+        print(f"Running training with {nnunet_trainer.__class__} class")
         if not only_run_validation:
             nnunet_trainer.run_training()
+        else:
+            print(f"WARNING: --val flag set. Running validation only. This will NOT save any checkpoints.")
 
         if val_with_best:
             nnunet_trainer.load_checkpoint(join(nnunet_trainer.output_folder, 'checkpoint_best.pth'))

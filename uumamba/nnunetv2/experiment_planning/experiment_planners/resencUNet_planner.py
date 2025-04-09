@@ -3,8 +3,8 @@ from typing import Union, List, Tuple
 from torch import nn
 
 from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
-# from dynamic_network_architectures.architectures.unet import ResidualEncoderUNet
-from dynamic_network_architectures.architectures.residual_unet import ResidualEncoderUNet
+from dynamic_network_architectures.architectures.unet import ResidualEncoderUNet
+# from dynamic_network_architectures.architectures.residual_unet import ResidualEncoderUNet
 
 class ResEncUNetPlanner(ExperimentPlanner):
     def __init__(self, dataset_name_or_id: Union[str, int],

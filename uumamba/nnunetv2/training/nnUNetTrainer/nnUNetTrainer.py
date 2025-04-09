@@ -27,7 +27,7 @@ from nnunetv2.evaluation.evaluate_predictions import compute_metrics_on_folder
 from nnunetv2.inference.export_prediction import export_prediction_from_logits, resample_and_save
 from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 from nnunetv2.inference.sliding_window_prediction import compute_gaussian
-from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
+from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results, nnUNet_results_base
 from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_patch_size
 from nnunetv2.training.data_augmentation.custom_transforms.cascade_transforms import MoveSegAsOneHotToData, \
     ApplyRandomBinaryOperatorTransform, RemoveRandomConnectedComponentFromOneHotEncodingTransform
@@ -60,13 +60,17 @@ from sklearn.model_selection import KFold
 from torch import autocast, nn
 from torch import distributed as dist
 from torch.cuda import device_count
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from nnunetv2.training.loss.compound_losses import AutoWeighted_DC_and_CE_and_Focal_loss
 from nnunetv2.training.loss_functions.crossentropy import RobustCrossEntropyLoss
 from nnunetv2.training.loss.sam import SAM
 from nnunetv2.training.loss.bypass_bn import enable_running_stats, disable_running_stats
+
+
+def getTimeString():
+    return datetime.now().strftime("%y%m%d-%Hh%Mm")
 
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict, unpack_dataset: bool = True,
@@ -124,9 +128,10 @@ class nnUNetTrainer(object):
         # inference and some of the folders may not be defined!
         self.preprocessed_dataset_folder_base = join(nnUNet_preprocessed, self.plans_manager.dataset_name) \
             if nnUNet_preprocessed is not None else None
-        self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
-                                       self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
-            if nnUNet_results is not None else None
+        # self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
+        #                                self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
+        #     if nnUNet_results is not None else None
+        self.output_folder_base = nnUNet_results
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
         self.epoch_output_folder = join(self.output_folder_base, f'fold_{fold}/checkpoint')
         self.preprocessed_dataset_folder = join(self.preprocessed_dataset_folder_base,
@@ -136,19 +141,24 @@ class nnUNetTrainer(object):
         # IMPORTANT! the mapping must be bijective, so lowres must point to fullres and vice versa (using
         # "previous_stage" and "next_stage"). Otherwise it won't work!
         self.is_cascaded = self.configuration_manager.previous_stage_name is not None
+        print(f"Is this a cascaded training? {self.is_cascaded}")
+        # self.folder_with_segs_from_previous_stage = \
+        #     join(nnUNet_results, self.plans_manager.dataset_name,
+        #          self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" +
+        #          self.configuration_manager.previous_stage_name, 'predicted_next_stage', self.configuration_name) \
+        #         if self.is_cascaded else None
         self.folder_with_segs_from_previous_stage = \
-            join(nnUNet_results, self.plans_manager.dataset_name,
-                 self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" +
+            join(nnUNet_results,
                  self.configuration_manager.previous_stage_name, 'predicted_next_stage', self.configuration_name) \
                 if self.is_cascaded else None
 
         ### Some hyperparameters for you to fiddle with
         self.initial_lr = 1e-2
-        self.weight_decay = 3e-5
+        self.weight_decay = 2e-5
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 250
+        self.num_epochs = 500
         self.current_epoch = 0
         self.enable_deep_supervision = True
         
@@ -159,8 +169,12 @@ class nnUNetTrainer(object):
 
         self.num_input_channels = None  # -> self.initialize()
         self.network = None  # -> self._get_network()
-        self.optimizer = self.lr_scheduler = None  # -> self.initialize
+        self.optimizer = None  # -> self.initialize
+        self.lr_scheduler = None  # -> self.initialize
+        # Configure GradScaler with a lower initial scale and custom growth/backoff factors to mitigate NaNs
         self.grad_scaler = GradScaler() if self.device.type == 'cuda' else None
+        # self.grad_scaler = GradScaler(init_scale=3**10, backoff_factor=1/3) if self.device.type == 'cuda' else None
+        # self.grad_scaler = None
         self.loss = None # -> self.initialize
 
         ### Simple logging. Don't take that away from me!
@@ -184,7 +198,7 @@ class nnUNetTrainer(object):
         # self.configure_rotation_dummyDA_mirroring_and_inital_patch_size and will be saved in checkpoints
 
         ### checkpoint saving stuff
-        self.save_every = 50
+        self.save_every = 10
         self.disable_checkpointing = False
 
         ## DDP batch size and oversampling can differ between workers and needs adaptation
@@ -472,6 +486,10 @@ class nnUNetTrainer(object):
                                    f"training:\nConfiguration name: {self.configuration_name}\n",
                                    self.configuration_manager, '\n', add_timestamp=False)
             self.print_to_log_file('These are the global plan.json settings:\n', dct, '\n', add_timestamp=False)
+            if hasattr(self.network, '_constructor_arguments'):
+                self.print_to_log_file('These are the network model constructor arguments:\n',
+                                       self.network.__class__.__name__, '\n',
+                                       self.network._constructor_arguments, '\n', add_timestamp=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(self.network.parameters(), self.initial_lr, weight_decay=self.weight_decay,
@@ -929,46 +947,44 @@ class nnUNetTrainer(object):
             target = [i.to(self.device, non_blocking=True) for i in target]
         else:
             target = target.to(self.device, non_blocking=True)
-            
-        def closure():
-            if self.grad_scaler is not None:
-                self.optimizer.zero_grad()
-            else:
-                self.optimizer.zero_grad(set_to_none=True)
-
-            with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-                output = self.network(data)
-                loss = self.loss(output, target)
-            if self.grad_scaler is not None:
-                self.grad_scaler.scale(loss).backward()
-            else:
-                loss.backward()
-            return loss
 
         # first forward-backward step
         enable_running_stats(self.network)
-        l = closure()
-        self.optimizer.first_step(zero_grad=True)
-
+        self.optimizer.zero_grad()
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+            output = self.network(data)
+            loss = self.loss(output, target)
+        # if self.grad_scaler is not None:
+        #     self.grad_scaler.scale(loss).backward()
+        #     self.grad_scaler.step(self.optimizer, step_num=1)
+        # else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=2.0)
+            # self.optimizer.step(step_num=1)
+            self.optimizer.first_step()
+        
         # second step
         disable_running_stats(self.network)
+        self.optimizer.zero_grad()
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+            output = self.network(data)
+            loss = self.loss(output, target)
         if self.grad_scaler is not None:
-            self.optimizer.zero_grad()
-            with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-                output = self.network(data)
-                l = self.loss(output, target)
-            self.grad_scaler.scale(l).backward()
-            self.grad_scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)# torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
-            self.optimizer.second_step(zero_grad=True)
-            self.grad_scaler.update()
+            self.grad_scaler.scale(loss).backward()
+            self.grad_scaler.step(self.optimizer)
+            # self.grad_scaler.unscale_(self.optimizer)
+            # torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)# torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
+            # self.optimizer.step(zero_grad=True)
         else:
-            l = closure()
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)# torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
-            self.optimizer.second_step(zero_grad=True)
+            loss.backward()
+            # torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)# torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
+            self.optimizer.step(step_num=2)
+        
+        if self.grad_scaler is not None:
+            self.grad_scaler.update() # Called only once
         
         enable_running_stats(self.network)
-        return {'loss': l.detach().cpu().numpy()}
+        return {'loss': loss.detach().cpu().numpy()}
 
     def on_train_epoch_end(self, train_outputs: List[dict]):
         outputs = collate_outputs(train_outputs)
@@ -1100,8 +1116,8 @@ class nnUNetTrainer(object):
         if (current_epoch + 1) % self.save_every == 0 and current_epoch != (self.num_epochs - 1):
             self.save_checkpoint(join(self.output_folder, 'checkpoint_latest.pth'))
 
-        if self._best_ema is None or np.round(self.logger.my_fantastic_logging['ema_fg_dice'][-1], decimals=4) > np.round(self._best_ema, decimals=4):
-                self.save_checkpoint(join(self.epoch_output_folder, f'checkpoint_{str(current_epoch).zfill(4)}.pth'))
+        # if self._best_ema is None or np.round(self.logger.my_fantastic_logging['ema_fg_dice'][-1], decimals=4) > np.round(self._best_ema, decimals=4):
+        #         self.save_checkpoint(join(self.epoch_output_folder, f'checkpoint_{str(current_epoch).zfill(4)}.pth'))
                 
         # handle 'best' checkpointing. ema_fg_dice is computed by the logger and can be accessed like this
         if self._best_ema is None or self.logger.my_fantastic_logging['ema_fg_dice'][-1] > self._best_ema:
@@ -1306,6 +1322,12 @@ class nnUNetTrainer(object):
         compute_gaussian.cache_clear()
 
     def run_training(self):
+        
+        # Adding timer code for backup results every 5 hours
+        scriptStartTime = int(os.getenv('SCRIPT_START_TIME', time()))
+        lastBackupTime = scriptStartTime
+        backupInterval = 5 * 60 * 60  # 5 hours in seconds
+        
         self.on_train_start()
 
         for epoch in range(self.current_epoch, self.num_epochs):
@@ -1313,6 +1335,7 @@ class nnUNetTrainer(object):
 
             self.on_train_epoch_start()
             train_outputs = []
+            
             for batch_id in range(self.num_iterations_per_epoch):
                 train_outputs.append(self.train_step(next(self.dataloader_train)))
             self.on_train_epoch_end(train_outputs)
@@ -1325,5 +1348,20 @@ class nnUNetTrainer(object):
                 self.on_validation_epoch_end(val_outputs)
 
             self.on_epoch_end()
+            
+            # Check if validation loss was NaN
+            # if np.isnan(val_outputs[-1]['loss']):
+            #     self.print_to_log_file('Validation loss is NaN. Stopping training.')
+            #     break
+            
+            if time() - lastBackupTime > backupInterval:
+                # Compress self.output_folder to ~/staging/results_backup.tar.gz
+                self.print_to_log_file(f'Backing up results... at {getTimeString()} at epoch {epoch+1}')
+                backupFolder = os.path.expanduser('~/staging')
+                if not os.path.exists(backupFolder):
+                    os.makedirs(backupFolder)
+                shutil.make_archive(os.path.join(backupFolder, 'results_backup'), 'gztar', nnUNet_results_base)
+                self.print_to_log_file('Backup complete.')
+                lastBackupTime = time()
 
         self.on_train_end()

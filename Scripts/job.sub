@@ -1,0 +1,41 @@
+# CHTC Submit File
+
+universe = vanilla
+
+#chtc_want_el8 = true
+
+batch_name = "UUMamba-Exp $(Cluster)"
+
+RUN_ID = $ENV(NOW)_$(Cluster)
+
+executable = Scripts/RunExperiment.sh
+arguments = $(RUN_ID)
+log = execution_logs/$(RUN_ID).log
+output = execution_logs/$(RUN_ID).out
+error = execution_logs/$(RUN_ID).err
+stream_output = true
+stream_error = true
+
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT_OR_EVICT
+
+Requirements = (Target.HasCHTCStaging == true)
+
+# For cached files: osdf:///chtc/staging/vichare2/...
+transfer_input_files = code/, $ENV(HOME)/Scripts
+transfer_output_files = results
+
+# GPU request
+request_gpus = 1
++GPUJobLength = "short"
+#+GPUJobLength = "medium"
++WantGPULab = true
+require_gpus = (Capability >= 8.0) && (GlobalMemoryMb >= 8192)
+#require_gpus = (Capability < 8.0)
+
+# CPU, RAM and Disk Request
+request_cpus = 2
+request_memory = 16GB
+request_disk = 128GB
+
+queue 1
