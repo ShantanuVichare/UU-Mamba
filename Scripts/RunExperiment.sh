@@ -89,8 +89,11 @@ echo "Script execution started at $(date)"
 # python uumamba/nnunetv2/dataset_conversion/Dataset112_UCSF_PGDM.py -i data/UCSF-PDGM-Filtered -o data/nnUNet_raw/Dataset112_UCSF_PGDM
 
 # Preprocess the dataset
-nnUNetv2_plan_and_preprocess -d 301 --verify_dataset_integrity
+nnUNetv2_plan_and_preprocess -d 111 -c 3d_fullres --verify_dataset_integrity
 # nnUNetv2_train 301 3d_fullres 4 -tr nnUNetTrainerUMambaEnc --c
+
+# Run training with output logged to a file and errors to a separate file
+# nnUNetv2_train 310 3d_fullres 4 -tr nnUNetTrainerUMambaEnc --c > logs/$(date +%s).log 2> logs/$(date +%s).err
 
 # If training is completed, move results from results/running to results/RUN_ID
 # python finalize_results.py

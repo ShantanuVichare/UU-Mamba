@@ -4,6 +4,8 @@ import shutil
 from datetime import datetime
 from time import time, sleep
 
+from nnunetv2.paths import nnUNet_results_backup
+
 def getTimeString(timestamp=None):
     if timestamp is not None:
         return datetime.fromtimestamp(timestamp).strftime("%y%m%d-%Hh%Mm")
@@ -20,10 +22,8 @@ print(f'Starting at {getTimeString()}. Will start transfer at {getTimeString(scr
 
 sleep(delayTime)
 
-# Compress self.output_folder to ~/staging/results_backup.tar.gz
+# Compress self.output_folder to {nnUNet_results_backup}/results_backup.tar.gz
 print(f'Backing up results... at {getTimeString()}')
-backupFolder = os.path.expanduser('~/staging')
-if not os.path.exists(backupFolder):
-    os.makedirs(backupFolder)
-shutil.make_archive(os.path.join(backupFolder, 'results_backup_MANUAL'), 'gztar', os.getenv('OUTPUT_PATH'))
+
+shutil.make_archive(os.path.join(nnUNet_results_backup, 'results_backup_MANUAL'), 'gztar', os.getenv('OUTPUT_PATH'))
 print('Backup complete.')

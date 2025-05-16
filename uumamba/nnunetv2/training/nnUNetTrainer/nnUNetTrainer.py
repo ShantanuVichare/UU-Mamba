@@ -27,7 +27,7 @@ from nnunetv2.evaluation.evaluate_predictions import compute_metrics_on_folder
 from nnunetv2.inference.export_prediction import export_prediction_from_logits, resample_and_save
 from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 from nnunetv2.inference.sliding_window_prediction import compute_gaussian
-from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results, nnUNet_results_base
+from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results, nnUNet_results_base, nnUNet_results_backup
 from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_patch_size
 from nnunetv2.training.data_augmentation.custom_transforms.cascade_transforms import MoveSegAsOneHotToData, \
     ApplyRandomBinaryOperatorTransform, RemoveRandomConnectedComponentFromOneHotEncodingTransform
@@ -158,7 +158,7 @@ class nnUNetTrainer(object):
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 500
+        self.num_epochs = 100 #500
         self.current_epoch = 0
         self.enable_deep_supervision = True
         
@@ -1355,12 +1355,9 @@ class nnUNetTrainer(object):
             #     break
             
             if time() - lastBackupTime > backupInterval:
-                # Compress self.output_folder to ~/staging/results_backup.tar.gz
+                # Compress self.output_folder to {nnUNet_results_backup}/results_backup.tar.gz
                 self.print_to_log_file(f'Backing up results... at {getTimeString()} at epoch {epoch+1}')
-                backupFolder = os.path.expanduser('~/staging')
-                if not os.path.exists(backupFolder):
-                    os.makedirs(backupFolder)
-                shutil.make_archive(os.path.join(backupFolder, 'results_backup'), 'gztar', nnUNet_results_base)
+                shutil.make_archive(os.path.join(nnUNet_results_backup, 'results_backup'), 'gztar', nnUNet_results_base)
                 self.print_to_log_file('Backup complete.')
                 lastBackupTime = time()
 

@@ -28,9 +28,9 @@ def copy_BraTS_segmentation_and_convert_labels_to_nnUNet(in_file: str, out_file:
             raise RuntimeError('unexpected label')
 
     seg_new = np.zeros_like(img_npy)
-    seg_new[img_npy == 4] = 3
-    seg_new[img_npy == 2] = 1
-    seg_new[img_npy == 1] = 2
+    seg_new[img_npy == 4] = 3 # Enhancing Tumor (ET)
+    seg_new[img_npy == 2] = 1 # Edema (ED)
+    seg_new[img_npy == 1] = 2 # Necrotic Tumor Core (TC)
     img_corr = sitk.GetImageFromArray(seg_new)
     img_corr.CopyInformation(img)
     sitk.WriteImage(img_corr, out_file)

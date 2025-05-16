@@ -43,15 +43,17 @@ data/
 base = join(os.sep.join(__file__.split(os.sep)[:-3]), 'data') 
 # or you can set your own path, e.g., base = '/home/user_name/Documents/UU-Mamba/data'
 # base = '/workspace/UU-Mamba/data'
-base = expanduser('~/data')
+base = expanduser('~/Projects/uumamba/code/data')
 nnUNet_raw = join(base, 'nnUNet_raw') # os.environ.get('nnUNet_raw')
 nnUNet_preprocessed = join(base, 'nnUNet_preprocessed') # os.environ.get('nnUNet_preprocessed')
 # nnUNet_results = join(base, 'nnUNet_results') # os.environ.get('nnUNet_results')
 
-nnUNet_results_base = os.getenv('OUTPUT_PATH', expanduser('~/results'))
+nnUNet_results_base = os.getenv('OUTPUT_PATH', expanduser('~/Projects/uumamba/code/results'))
 nnUNet_results = join(nnUNet_results_base, 'nnUNet_results', 'running')
 os.makedirs(nnUNet_results, exist_ok=True)
-
+nnUNet_results_backup = join(nnUNet_results_base, 'nnUNet_results', 'running_backup')
+# nnUNet_results_backup = os.path.expanduser('~/staging')
+os.makedirs(nnUNet_results_backup, exist_ok=True)
 
 if nnUNet_raw is None:
     print("nnUNet_raw is not defined and nnU-Net can only be used on data for which preprocessed files "
